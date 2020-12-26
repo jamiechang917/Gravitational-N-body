@@ -1,103 +1,162 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-import sys
-import time
+import numba as nb
+from numba import cuda, prange
 
-import matplotlib as mpl
-mpl.rcParams['agg.path.chunksize'] = 100000
-plt.rcParams['animation.ffmpeg_path'] = r'C:\Users\Jamie Chang\Desktop\ML_Snake_Game\FINAL\FFMPEG\bin\ffmpeg.exe'
+import time
+import csv
+
+import cProfile
+
+# Updates Notes
+# Add function to output/read csv data.
+# Remove animation
 
 #===========Problems need to be fixed=============#
 # 1. Particles.generate_particles() needs to be improved
-# 2.
+# 2. Brute_force_method() needs to be improved from N^2 to 0.5*N!/N-2!
 
 #==============Simulation Parameters==============#
-N = 100
+N = 1000
 dt = 0.01
 t_max = 5
 softening_factor = 0.1
 #==============Physical Parameters================#
 mass = 1
-avg_vel  =0
-G = 10
+avg_vel  = 0
+G = 1
 #==============Environment Parameters=============#
 #x_range = [-50,50] # range of initial position of particles in x axis
 #y_range = [-50,50] # range of initial position of particles in y axis
-r_range = 10 # the max range of the distance from origin to initial position of particles
-box_length = 30
+r_range = 30 # the max range of the distance from origin to initial position of particles
+#box_length = 30
 #==============Videos Parameters==================#
 FPS = 30
 VIDEO_PATH = r"C:\Users\Jamie Chang\Desktop\GalacticSim\Python\videos"
+CSV_PATH = r"C:\Users\Jamie Chang\Desktop\GalacticSim\Python"
 
 #==============Others Parameters==================#
 t = 0
 time_steps = int(t_max/dt)
+filename = r"\N_Body_"+time.ctime().replace(" ","_").replace(":","")+".csv"
 #=================================================#
 
-class Particles():
-    def __init__(self,number_of_particles,mass,avg_vel,r_range):
-        self.N = number_of_particles
-        self.m = mass
-        self.init_vel = avg_vel
-        #self.x_range = x_range
-        #self.y_range = y_range
-        self.r_range = r_range
-        self.avg_vel = avg_vel
-
-        self.pos_M, self.vel_M = self.generate_particles(r_range=self.r_range,avg_vel=self.avg_vel)
-
-    def generate_particles(self,r_range,avg_vel): # Initialization
+def generate_particles(N,r_range,avg_vel): # Initialization
+        np.random.seed(2020)
         random_theta = np.random.uniform(0,2*np.pi,(N,1))
         pos_M = np.random.uniform(0,r_range,(N,1)) * np.concatenate((np.cos(random_theta),np.sin(random_theta)),axis=1)
         vel_M = avg_vel*np.concatenate((np.cos(random_theta),np.sin(random_theta)),axis=1)
-        return (pos_M, vel_M)
+        return pos_M, vel_M
+
+pos_M, vel_M = generate_particles(N,r_range,avg_vel)
+
+@nb.njit
+def total_U(pos):
+    U = 0
+    for i in range(N-1):
+        for j in range(i+1,N):
+            r = np.float(np.linalg.norm(pos[i]-pos[j]))
+            U = U - np.divide(G*(mass**2),r)
+    return U
+
+@nb.njit
+def total_K(vel):
+    K = 0
+    for i in range(N):
+        v = np.float(np.linalg.norm(vel[i]))
+        K = K + 0.5*mass*(v**2)
+    return K
+
+E0 = total_K(vel_M) + total_U(pos_M)
+
+@nb.njit()
+def brute_force_method(pos):
+    g = np.zeros((N,2)) # 2 for 2D
+    for i in range(N):
+        for j in range(N):
+            r = pos[i] - pos[j]
+            r_norm = np.linalg.norm(r)
+            if r_norm == 0.0:
+                continue
+            elif r_norm <= softening_factor:
+                g[i] = g[i] -(G*mass*((softening_factor)**-2)*(np.divide(r,r_norm)))
+            else:
+                g[i] = g[i] -(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r) #-------------------------------1
+    #print('g\n',g)
+    return g
+
+@nb.njit()
+def brute_force_method_elastic_collision(pos,vel):
+    g = np.zeros((N,2)) # 2 for 2D
+    for i in range(N-1):
+        for j in range(i+1,N):
+            r = pos[i] - pos[j]
+            r_norm = np.linalg.norm(r)
+            if r_norm <= softening_factor:
+                #print(vel[i],vel[j],"BEFORE")
+                #!!!!!Important, to be careful for this "swapping" part
+                vel_T = vel.copy()
+                vel[i] = vel_T[j]
+                vel[j] = vel_T[i]
+                #print(vel[i],vel[j],"AFTER")
+            else:
+                # g[i] = g[i] -(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r)
+                # g[j] = g[j] +(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r)
+                g[i] = g[i] -(G*mass*((r_norm**-3)*r))
+                g[j] = g[j] +(G*mass*((r_norm**-3)*r))
+    return g,vel
+
+
+@nb.njit()
+def update(pos,vel):
+    vel_next = vel + brute_force_method(pos=pos)*dt  #-------------------------------2
+    pos_next = pos + vel*dt  #-------------------------------3
+    return pos_next,vel_next
+
+@nb.njit()
+def update_elastic_collision(pos,vel):
+    result = brute_force_method_elastic_collision(pos=pos,vel=vel)
+    vel_next = result[1] + result[0]*dt #-------------------------------2
+    pos_next = pos + vel_next*dt  #-------------------------------3
+    return pos_next,vel_next
+
+#kick-drift-kick, slower but more precised
+@nb.njit()
+def update_leapfrog(pos,vel):
+    g = brute_force_method(pos=pos)
+    vel_half = vel + 0.5*dt*g
+    pos_next = pos + vel_half*dt
+    g_next = brute_force_method(pos=pos_next)
+    vel_next = vel_half + 0.5*dt*g_next
+    #print('g\n',g)
+    return pos_next,vel_next
+
+def datasaver(init=False,t=0):
+    if init == True: # Write all parameters in first row.
+        with open(CSV_PATH+filename,"a",newline="") as csvfile: 
+            writer = csv.writer(csvfile, delimiter=',')
+            writer.writerow(['Parameters',N,dt,t_max,softening_factor,mass,avg_vel,G,r_range])
+    else:
+        with open(CSV_PATH+filename,"a",newline="") as csvfile: 
+            writer = csv.writer(csvfile, delimiter=',')
+            writer.writerow([t])
+            writer.writerow(pos_M.flatten())
+            writer.writerow(vel_M.flatten())
 
 def main():
-    P = Particles(number_of_particles=N,mass=mass,avg_vel=avg_vel,r_range=r_range)
-
-    def brute_force_method(P:Particles):
-        g = np.zeros((N,2)) # 2 for 2D
-        for i in range(N):
-            for j in range(N):
-                r = P.pos_M[i] - P.pos_M[j]
-                g[i] += -G*mass*(((np.linalg.norm(r)**2) + (softening_factor**2))**-1.5)*r
-        return g
-
-
-    def update(P:Particles):
-        global t
-        P.vel_M += brute_force_method(P=P)*dt
-        P.pos_M += P.vel_M*dt
-        t += dt
-
-    def animation():
-        # Matplotlib animation
-        fig, ax = plt.subplots(figsize = (10, 10),dpi=100)
-        scat = ax.scatter([],[],s=1)
-
-        def fig_init():
-            ax.set_xlim(-box_length,box_length)
-            ax.set_ylim(-box_length,box_length)
-            return scat,
-
-        def fig_update(frame):
-            update(P=P)
-            scat.set_offsets(P.pos_M)
-            print("Recording the animation. Progress:%0.2f %%" % (100*frame/t_max))
-            return scat,
-        ani = FuncAnimation(fig=fig,func=fig_update,frames=np.linspace(0,t_max,time_steps),init_func=fig_init,blit=True,repeat=False,save_count=sys.maxsize)
-
-        ani.save(VIDEO_PATH+r"\N_Body.mp4",fps=FPS)
-        #plt.show()
-        print(".mp4 file saved.")
-
-    animation()
-
-
+    global pos_M ,vel_M
+    datasaver(init=True)
+    for time in np.linspace(0,t_max,time_steps):
+        datasaver(t=time)
+        # print("pos_M\n",pos_M)
+        # print("vel_M\n",vel_M)
+        pos_M,vel_M = update_elastic_collision(pos=pos_M,vel=vel_M)
+        E = total_K(vel_M) + total_U(pos_M)
+        print(f"E: {E}, E0: {E0}, Error: {100*abs(E-E0)/E0}%")
+        print("Recording the data. Progress:%0.2f %%" % (100*time/t_max))
+        
 if __name__ == '__main__':
     program_start = time.time()
+    #cProfile.run('main()',sort="cumulative")
     main()
     program_end = time.time()
-    print(f"N={N}, Total computation time: {program_end-program_start}s")
-
+    print(f"N={N}, Total computation time: {program_end-program_start}s, filename: {filename}")
