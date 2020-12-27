@@ -19,7 +19,7 @@ import cProfile
 N = 1000
 dt = 0.01
 t_max = 5
-softening_factor = 0.1
+softening_factor = 0.5
 #==============Physical Parameters================#
 mass = 1
 avg_vel  = 0
@@ -27,7 +27,7 @@ G = 1
 #==============Environment Parameters=============#
 #x_range = [-50,50] # range of initial position of particles in x axis
 #y_range = [-50,50] # range of initial position of particles in y axis
-r_range = 30 # the max range of the distance from origin to initial position of particles
+r_range = 50 # the max range of the distance from origin to initial position of particles
 #box_length = 30
 #==============Videos Parameters==================#
 FPS = 30
@@ -68,20 +68,35 @@ def total_K(vel):
 
 E0 = total_K(vel_M) + total_U(pos_M)
 
+# @nb.njit()
+# def brute_force_method(pos):
+#     g = np.zeros((N,2)) # 2 for 2D
+#     for i in range(N):
+#         for j in range(N):
+#             r = pos[i] - pos[j]
+#             r_norm = np.linalg.norm(r)
+#             if r_norm == 0.0:
+#                 continue
+#             elif r_norm <= softening_factor:
+#                 g[i] = g[i] -(G*mass*((softening_factor)**-2)*(np.divide(r,r_norm)))
+#             else:
+#                 g[i] = g[i] -(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r) #-------------------------------1
+#     #print('g\n',g)
+#     return g
+
 @nb.njit()
 def brute_force_method(pos):
     g = np.zeros((N,2)) # 2 for 2D
-    for i in range(N):
-        for j in range(N):
+    for i in range(N-1):
+        for j in range(i+1,N):
             r = pos[i] - pos[j]
             r_norm = np.linalg.norm(r)
-            if r_norm == 0.0:
-                continue
-            elif r_norm <= softening_factor:
-                g[i] = g[i] -(G*mass*((softening_factor)**-2)*(np.divide(r,r_norm)))
+            if r_norm <= softening_factor:
+                g[i] = g[i] -(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r)
+                g[j] = g[j] +(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r)
             else:
-                g[i] = g[i] -(G*mass*(((r_norm**2) + (softening_factor**2))**-1.5)*r) #-------------------------------1
-    #print('g\n',g)
+                g[i] = g[i] -(G*mass*(r_norm**-3)*r) #-------------------------------1
+                g[j] = g[j] +(G*mass*(r_norm**-3)*r)
     return g
 
 @nb.njit()
@@ -127,7 +142,6 @@ def update_leapfrog(pos,vel):
     pos_next = pos + vel_half*dt
     g_next = brute_force_method(pos=pos_next)
     vel_next = vel_half + 0.5*dt*g_next
-    #print('g\n',g)
     return pos_next,vel_next
 
 def datasaver(init=False,t=0):
@@ -145,14 +159,19 @@ def datasaver(init=False,t=0):
 def main():
     global pos_M ,vel_M
     datasaver(init=True)
+    counter = 0
     for time in np.linspace(0,t_max,time_steps):
         datasaver(t=time)
         # print("pos_M\n",pos_M)
         # print("vel_M\n",vel_M)
-        pos_M,vel_M = update_elastic_collision(pos=pos_M,vel=vel_M)
-        E = total_K(vel_M) + total_U(pos_M)
-        print(f"E: {E}, E0: {E0}, Error: {100*abs(E-E0)/E0}%")
+        #pos_M,vel_M = update_elastic_collision(pos=pos_M,vel=vel_M)
+        pos_M,vel_M = update_leapfrog(pos=pos_M,vel=vel_M)
+        if counter == 10:
+            counter = 0
+            E = total_K(vel_M) + total_U(pos_M)
+            print("E: %d, E0: %d, Error: %0.3f %%" % (E,E0,100*(E-E0)/E0))
         print("Recording the data. Progress:%0.2f %%" % (100*time/t_max))
+        counter += 1
         
 if __name__ == '__main__':
     program_start = time.time()
