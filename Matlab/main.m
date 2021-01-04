@@ -1,23 +1,24 @@
-close all
 clear all
-clc
-rng('default')
-%===========Parameters===========%
+clc;
+%====================================%
 % Global everything
-global G N dt t_max t mass avg_velocity pos_M vel_M time_steps softening_factor
+global G N dt t_max t mass radius avg_velocity pos_M vel_M softening_factor dimension
 % Simulation Parameters
-N = 100; % numbers of particles
+dimension = 3; 
+N1=100;
+N2=100;
+N = N1+N2; % numbers of particles
 dt = 0.01;
-t_max = 3;
+t_max = 5;
 t = 0;
-time_steps = int32(t_max/dt);
-softening_factor = 1; % This factor should be small, cannot be zero otherwise will cause error
-
+softening_factor=0.1;
 % Properties of Particles
 mass = 1;
-avg_velocity = 10;
+radius = 1;
+avg_velocity = 5;
 x_range = 10; % range of initial position in x axis
 y_range = 10; % range of initial position in y axis
+z_range = 10;
 
 % Properties of Squared Box
 box_length = 100;
@@ -26,75 +27,154 @@ box_length = 100;
 G = 1;
 %====================================%
 
-% Initialize position and velocity matrices
 pos_M = [];
 vel_M = [];
-for i=1:N
-    pos_M(end+1,:) = init_position_2D(-x_range,x_range,-y_range,y_range);
-    vel_M(end+1,:) = init_velocity_2D(avg_velocity);
-end
 
-U0 = calculate_total_potential_energy();
-K0 = N*0.5*mass*(avg_velocity^2);
-E0 = K0 + U0;
 
-% Main
+
 clear M
-h = figure;
-video = VideoWriter('nBody.avi');
-open(video);
-for timestep=1:time_steps
-    scatter(pos_M(:,1),pos_M(:,2),5,'filled')
-    K = 0;
+csv=readmatrix('result.csv','NumHeaderLines',1);
+if(size(csv,2)==0)
+    A=["N","dt","t_max","softening_factor","mass","avg_velocity",G,"radius"];
+    B=[N,dt,t_max,softening_factor,mass,avg_velocity,G,radius];
+    writematrix(A,'result.csv');
+    writematrix(B,'result.csv','Writemode','append');
+    clear A;
     for i=1:N
-        vel_M(i,:) = vel_M(i,:) + dt.*calculate_gravitational_acc(i);
-        pos_M(i,:) = pos_M(i,:) + dt.*vel_M(i,:);
-        K = K + 0.5*mass*(norm(vel_M(i,:))^2);
+        pos_M(end+1,:) = init_position_2D([-x_range,x_range,-y_range,y_range,-z_range,z_range]);
+        vel_M(end+1,:) = init_velocity_2D(avg_velocity);
     end
-    U = calculate_total_potential_energy();
-    E = K+U;
-    t = t+dt;
-    
-    axis equal;
-    xlim([-box_length/2,box_length/2]);
-    ylim([-box_length/2,box_length/2]);
-    %M(timestep) = getframe(h);
-    writeVideo(video,getframe(h));
-    sprintf('Time: %0.3f, Progress: %0.1f %%, E0: %d, E: %d',t,(100*timestep/time_steps),E0,E)
-    clf
+else
+    const=num2cell(csv(1,:))
+    [N,dt,t_max,softening_factor,mass,avg_velocity,G,radius]=const{:};
+    t=csv(end-2,1);
+    p=csv(end-1,1:N*dimension);
+    pos_M=reshape(p,dimension,[]);
+    v=csv(end-1,1:N*dimension);
+    vel_M=reshape(p,dimension,[]);
 end
-%movie(gcf,M,3,24);
-close(video);
+clear csv;
 
 
+%======Main Program=====%
+M=getframe();
+counter=0;
+E0=total_energy()
+while t <= t_max
+    datasaver();
+    update_leapfrag();
+    if counter==10
+        counter=0;
+        E=total_energy();
+        fprintf("E:%d, E0:%d, Error:%.3f\n",E,E0,100*(abs(E-E0)/E0));
+    end
+    fprintf("Recording data. Progress:%.2f\n",100*(t/t_max));
+    counter=counter+1;
+    t=t+dt;
+    scatter3(pos_M(1:N1,1),pos_M(1:N1,2),pos_M(1:N1,3),'b','filled');
+    hold on;
+    scatter3(pos_M(N1+1:N,1),pos_M(N1+1:N,2),pos_M(N1+1:N,3),'r','filled');
+    axis(2*[-x_range,x_range,-y_range,y_range,-z_range,z_range]);
+    M(end+1)=getframe();
+    clf;
+end
+v = VideoWriter('./animation.avi','Indexed AVI');
+open(v);
+writeVideo(v,M(2:end));
+fclose('all');
 
-%=========Functions=========%
-function pos = init_position_2D(xmin,xmax,ymin,ymax)
-     pos = [xmin+(xmax-xmin).*rand(),ymin+(ymax-ymin).*rand()];
+
+function pos = init_position_2D(range)
+    global dimension 
+    if dimension == 2
+        pos = [range(1)+(range(2)-range(1)).*rand(),range(3)+(range(4)-range(3)).*rand()];
+    else dimension == 3
+        pos = [range(1)+(range(2)-range(1)).*rand(),range(3)+(range(4)-range(3)).*rand(),range(5)+(range(6)-range(5)).*rand()];
+    end
 end
 
 function vel = init_velocity_2D(init_velocity)
+    global dimension
+    if dimension == 2
      theta = 2*pi*rand();
      vel = init_velocity.*[cos(theta), sin(theta)];
-end
-
-function acc = calculate_gravitational_acc(particle_index)
-   global N pos_M G mass softening_factor
-   acc = [0,0];
-   for i=1:N
-      r = pos_M(particle_index,:) - pos_M(i,:);
-      acc = acc + (-G*mass/((norm(r)^2+softening_factor^2)^1.5)).*r; % add softening factor to avoid acc diverging.
-   end
-end
-
-function potential = calculate_total_potential_energy()
-    global pos_M G mass N
-    potential = 0;
-    for i=1:N-1
-       for j=i+1:N
-            r = norm(pos_M(i,:) - pos_M(j,:));
-            potential = potential + (-G*(mass^2)/r);
-       end
+    elseif dimension == 3
+        theta = 2*pi*rand();
+        phi =  2*pi*rand();
+        vel = init_velocity.*[sin(theta)*cos(phi), sin(theta)*sin(phi),sin(theta)];
     end
 end
 
+function E=total_energy()
+    global vel_M pos_M mass G N mass
+    K=0;
+    for i=1:N
+        v_norm=norm(vel_M(i,:));
+        K=K+0.5*mass*v_norm^2;
+    end
+    U=0;
+    for i=1:N
+        for j=i+1:N
+            r=norm(pos_M(i,:)-pos_M(j,:));
+            U=U-G*mass^2/r;
+        end
+    end
+    E=U+K
+end
+
+function update_leapfrag()
+    global pos_M vel_M dt
+    a = brute_force_method(pos_M);
+    vel_half=vel_M+0.5*a*dt;
+    pos_next=pos_M+vel_half*dt;
+    a_next=brute_force_method(pos_next);
+    vel_next=vel_half+0.5*dt*a_next;
+    pos_M=pos_next;
+    vel_M=vel_next;
+end
+
+function acc = brute_force_method(pos_M)
+   global N  G mass softening_factor dimension
+   acc=zeros(N,dimension);
+   for i=1:N-1;
+       for j=i+1:N
+           r=pos_M(i,:)-pos_M(j,:);
+           if norm(r)<=softening_factor
+               acc(i,:)=acc(i,:)-G*mass*((norm(r)^2+softening_factor^2)^(-1.5))*r;
+               acc(j,:)=acc(j,:)+G*mass*((norm(r)^2+softening_factor^2)^(-1.5))*r;
+           else
+               acc(i,:)=acc(i,:)-G*mass*r/(norm(r))^3;
+               acc(j,:)=acc(j,:)+G*mass*r/(norm(r))^3;
+           end
+       end
+   end
+end
+
+function elastic_collidision()
+    global N pos_M vel_M radius
+    pos_M=sortrows(pos_M);
+    for i=1:N-1
+        for j=i+1:N
+            if pos_M(j,1)-pos_M(i,1)>2*radius
+                continue;
+            end
+            r=pos_M(i,:)-pos_M(j,:);
+            v=vel_M(i,:)-vel_M(j,:);
+            if norm(r)<=2*radius && dot(v,r)>0
+                vi=dot(vel_M(i,:),r)*r/norm(r)^2;
+                vj=dot(vel_M(j,:),r)*r/norm(r)^2;
+                vel_M(i,:)=vel_M(i,:)-vi+vj;
+                vel_M(j,:)=vel_M(j,:)-vj+vi;
+            end
+        end
+    end
+end
+
+function datasaver()
+    global pos_M vel_M t
+    writematrix(t,'result.csv','Writemode','append');
+    p=reshape(pos_M,1,[]);
+    writematrix(p,'result.csv','Writemode','append');
+    v=reshape(vel_M,1,[]);
+    writematrix(v,'result.csv','Writemode','append');
+end
