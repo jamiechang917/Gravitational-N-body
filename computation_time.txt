@@ -1,5 +1,9 @@
 =============================================================
 Brutal-Force Method
-N=100, dt=0.01s, t_max=5s, 61.774s(Numpy), 42.10s(Matlab), 69.088s(Numpy, remove Class), 18.238s(njit, remove class)
+N=100, dt=0.01s, t_max=5s, mp4, 61.774s(Numpy), 42.10s(Matlab), 69.088s(Numpy, remove Class), 18.238s(njit, remove class)
+N=100, dt=0.01s, t_max=5s, csv, 48.277s(Numpy), 5.038s(njit), 4.968s(njit,fastmath), 9.305s(njit,parallel)
+N=1000, dt=0.01s, t_max=3s, csv, 201.554s(njit,parallel), 188.138s(njit)
+N=2000, dt=0.01s, t_max=10s, csv, 2630s(njit)
+N=20000, dt=0.01s t_max=15s, cdv, 3182s(cuda)
 
 =============================================================
