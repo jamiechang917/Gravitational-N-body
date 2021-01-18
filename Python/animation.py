@@ -137,6 +137,6 @@ def animation():
 
 if __name__ == '__main__':
     program_start = time.time()
-    # animation()
+    animation()
     program_end = time.time()
     print(f"Total computation time: {program_end-program_start}s")
